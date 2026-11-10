@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torch-hebbian"
+version = "0.1.0"
+description = "Hebbian plasticity (ABCD rules) on top of torch.nn.Linear, with rules that can be evolved or trained by gradient descent"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Salvatore Mastrangelo" }]
+keywords = ["pytorch", "hebbian", "plasticity", "neuroevolution", "meta-learning"]
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+examples = ["cma>=3.3", "gymnasium>=0.29"]
+dev = ["pytest>=7", "cma>=3.3", "gymnasium>=0.29"]
+
+[project.urls]
+Repository = "https://github.com/SalvatoreMastrangelo/torch-hebbian"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
