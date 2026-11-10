@@ -234,3 +234,25 @@ def test_reset_rows_with_a_cpu_mask_on_a_cuda_layer():
 
     moved = net[2].weight_delta.flatten(1).abs().sum(1) > 0
     assert moved.tolist() == [False, True, True]
+
+
+def test_plastic_state_and_population_are_not_buffers():
+    # utilities that walk model.buffers() (weight averaging, DDP buffer
+    # broadcast) must not see per-episode state
+    net = model()
+    hb.set_rules(net, np.random.default_rng(1).normal(size=(3, hb.num_rules(net))))
+    run(net, inputs())
+
+    assert list(net.buffers()) == []
+
+
+def test_weight_averaging_ignores_the_plastic_state():
+    torch.manual_seed(0)
+    net = nn.Sequential(HebbianLinear(4, 4, eta=0.2, decay=0.1), nn.BatchNorm1d(4))
+    hb.set_rules(net, np.random.default_rng(0).normal(size=hb.num_rules(net)), freeze=False)
+    net(torch.randn(8, 4))
+
+    averaged = torch.optim.swa_utils.AveragedModel(net, use_buffers=True)
+    averaged.update_parameters(net)
+
+    assert torch.equal(averaged.module[0].weight, net[0].weight)

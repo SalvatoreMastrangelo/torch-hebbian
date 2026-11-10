@@ -218,3 +218,27 @@ def test_adam_can_train_the_rules():
 
     assert loss.item() < 1e-4
     assert layer.weight.item() == 2.0
+
+
+def test_state_from_inference_mode_can_enter_a_graph_afterwards():
+    torch.manual_seed(0)
+    net = nn.Sequential(nn.Linear(4, 4), nn.Tanh(), HebbianLinear(4, 2, eta=0.5, decay=0.1))
+    set_rule(net[2], "A", torch.randn(2, 4))
+    with torch.inference_mode():
+        net(torch.randn(3, 4))
+
+    net(torch.randn(3, 4)).sum().backward()
+
+    assert net[0].weight.grad.abs().sum() > 0
+
+
+def test_population_set_in_inference_mode_can_be_used_with_autograd():
+    layer = HebbianLinear(4, 2, eta=0.5, decay=0.1)
+    with torch.inference_mode():
+        hb.set_rules(layer, torch.ones(3, layer.num_rules))
+    x = torch.randn(3, 4, requires_grad=True)
+
+    layer(x)
+    layer(x).sum().backward()
+
+    assert x.grad.abs().sum() > 0

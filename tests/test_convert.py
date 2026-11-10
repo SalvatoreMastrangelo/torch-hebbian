@@ -164,3 +164,54 @@ def test_hebbianize_changes_nothing_when_one_name_is_wrong():
 def test_hebbianize_rejects_shared_settings_next_to_a_dict():
     with pytest.raises(TypeError):
         hb.hebbianize(agent(), {"encoder": {}}, eta=0.1)
+
+
+def test_hebbianize_changes_nothing_when_one_setting_is_invalid():
+    model = agent()
+
+    with pytest.raises(ValueError):
+        hb.hebbianize(model, {"encoder": dict(eta=0.1), "actor.0": dict(decay=5.0)})
+
+    assert not isinstance(model.encoder, HebbianLinear)
+    assert not isinstance(model.actor[0], HebbianLinear)
+
+
+class Tied(nn.Module):
+    """The same layer registered under two names."""
+
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(nn.Linear(4, 4), nn.Linear(4, 4))
+        self.head = self.layers[1]
+
+    def forward(self, x):
+        return self.head(self.layers[0](x))
+
+
+@pytest.mark.parametrize("name", ["head", "layers.1"])
+def test_hebbianize_replaces_every_reference_to_a_shared_layer(name):
+    model = Tied()
+
+    hb.hebbianize(model, name)
+
+    assert isinstance(model.head, HebbianLinear)
+    assert model.head is model.layers[1]
+
+
+def test_hebbianize_refuses_subclasses_of_linear():
+    # a subclass may compute something else in forward (or, like LazyLinear,
+    # not have its weights yet); converting it would silently change the model
+    model = nn.Sequential(nn.LazyLinear(3))
+
+    with pytest.raises(TypeError, match="LazyLinear"):
+        hb.hebbianize(model, "0")
+
+
+def test_hebbianize_points_to_from_linear_for_the_model_itself():
+    with pytest.raises(ValueError, match="from_linear"):
+        hb.hebbianize(nn.Linear(3, 3), "")
+
+
+def test_from_linear_keeps_the_training_mode():
+    assert HebbianLinear.from_linear(nn.Linear(5, 3).eval()).training is False
+    assert HebbianLinear.from_linear(nn.Linear(5, 3).train()).training is True

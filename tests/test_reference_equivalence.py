@@ -24,8 +24,12 @@ def random_rules(*shape: int) -> dict:
     return {name: torch.randn(*shape, OUT, IN, dtype=torch.float64) for name in "ABCD"}
 
 
+MODES = {"grad": torch.enable_grad, "no_grad": torch.no_grad, "inference": torch.inference_mode}
+
+
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("w_max", [None, 0.6], ids=["unclipped", "clipped"])
-def test_single_rule_set_matches_reference(w_max):
+def test_single_rule_set_matches_reference(w_max, mode):
     torch.manual_seed(0)
     layer = HebbianLinear(IN, OUT, eta=ETA, decay=DECAY, w_max=w_max, dtype=torch.float64)
     rules = random_rules()
@@ -44,7 +48,9 @@ def test_single_rule_set_matches_reference(w_max):
     for _ in range(STEPS):
         x = torch.randn(ROWS, IN, dtype=torch.float64)
         expected = reference_step(reference, layer.bias.detach(), x)
-        assert torch.allclose(layer(x), expected, rtol=1e-10, atol=1e-12)
+        with MODES[mode]():  # the three modes take different code paths in the layer
+            output = layer(x)
+        assert torch.allclose(output, expected, rtol=1e-10, atol=1e-12)
         assert torch.allclose(layer.plastic_weight, reference.W, rtol=1e-10, atol=1e-12)
 
     # the rollout must have been a real test: weights moved, and clipping bit

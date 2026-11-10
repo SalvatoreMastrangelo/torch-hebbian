@@ -201,3 +201,84 @@ def test_weight_delta_is_a_snapshot_not_a_live_view():
         layer(ones(1))
 
     assert snapshot.item() == 2.0
+
+
+# --- what reset_state accepts as ``rows`` ---------------------------------
+# Integers are row indices. Environments often report finished episodes as
+# 0/1 integers or floats; reading those as indices would reset the wrong rows,
+# so they are refused instead of guessed.
+
+def six_everywhere(rows=4):
+    layer = drifting_layer()
+    layer(ones(rows))
+    layer(ones(rows))  # every row at W = 6
+    return layer
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        torch.tensor([0, 0, 1, 0]),
+        np.array([0, 0, 1, 0], dtype=np.int32),
+        [0, 0, 1, 0],
+        torch.tensor([0, 0, 0, 0]),
+    ],
+    ids=["long tensor", "int32 array", "list", "all zero"],
+)
+def test_reset_state_refuses_integer_flags_instead_of_guessing(flags):
+    layer = six_everywhere()
+
+    with pytest.raises(ValueError, match="bool"):
+        layer.reset_state(rows=flags)
+
+    assert layer(ones(4)).flatten().tolist() == [6.0] * 4  # nothing was reset
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [torch.tensor([0.0, 0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0, 0.0])],
+    ids=["float tensor", "float array"],
+)
+def test_reset_state_refuses_float_flags(flags):
+    layer = six_everywhere()
+
+    with pytest.raises(TypeError, match="bool"):
+        layer.reset_state(rows=flags)
+
+    assert layer(ones(4)).flatten().tolist() == [6.0] * 4
+
+
+def test_reset_state_refuses_indices_that_could_be_flags():
+    # with two rows, [1, 0] could mean "both rows" or "the first row only"
+    layer = six_everywhere(rows=2)
+
+    with pytest.raises(ValueError, match="bool"):
+        layer.reset_state(rows=[1, 0])
+
+
+def test_reset_state_refuses_repeated_indices():
+    layer = six_everywhere()
+
+    with pytest.raises(ValueError, match="repeated"):
+        layer.reset_state(rows=[1, 1])
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        ((0, 2), [2.0, 6.0, 2.0, 6.0]),
+        (np.array([3, 1]), [6.0, 2.0, 6.0, 2.0]),
+        (torch.tensor([False, True, True, False]).nonzero().squeeze(-1), [6.0, 2.0, 2.0, 6.0]),
+        (1, [6.0, 2.0, 6.0, 6.0]),
+        (slice(0, 2), [2.0, 2.0, 6.0, 6.0]),
+        ([], [6.0] * 4),
+        (torch.zeros(0, dtype=torch.long), [6.0] * 4),
+    ],
+    ids=["tuple", "int array", "nonzero ids", "single int", "slice", "empty list", "empty ids"],
+)
+def test_reset_state_accepts_row_indices(rows, expected):
+    layer = six_everywhere()
+
+    layer.reset_state(rows=rows)
+
+    assert layer(ones(4)).flatten().tolist() == expected

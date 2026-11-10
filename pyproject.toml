@@ -7,12 +7,12 @@ name = "torch-hebbian"
 version = "0.1.0"
 description = "Hebbian plasticity (ABCD rules) on top of torch.nn.Linear, with rules that can be evolved or trained by gradient descent"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Salvatore Mastrangelo" }]
 keywords = ["pytorch", "hebbian", "plasticity", "neuroevolution", "meta-learning"]
 dependencies = [
     "torch>=2.0",
-    "numpy>=1.21",
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]

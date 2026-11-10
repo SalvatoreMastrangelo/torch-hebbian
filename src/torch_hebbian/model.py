@@ -37,7 +37,13 @@ def hebbianize(
     The model is modified in place and returned. The new layers reuse the
     weight and bias parameters of the layers they replace and start with zero
     rules, so the model computes exactly what it did before until rules are
-    set or trained.
+    set or trained. Either every named layer is converted or, if anything is
+    wrong, none is.
+
+    Only layers whose type is exactly ``nn.Linear`` are accepted, and only if
+    the model calls them as modules (a layer whose ``weight`` is read directly
+    by its parent, like ``nn.MultiheadAttention.out_proj``, would not become
+    plastic).
 
     Args:
         layers: which layers, by their name in ``model.named_modules()``.
@@ -57,21 +63,42 @@ def hebbianize(
     else:
         plan = {name: settings for name in layers}
 
-    modules = dict(model.named_modules())
-    for name in plan:  # check everything before touching the model
-        module = modules.get(name) if name else None
+    # every name a module is registered under, including second names of a shared layer
+    modules = dict(model.named_modules(remove_duplicate=False))
+    for name in plan:  # check the names before building anything
+        if name == "":
+            raise ValueError(
+                "'' names the model itself, which cannot be replaced in place; "
+                "use HebbianLinear.from_linear(model, ...) instead"
+            )
+        module = modules.get(name)
         if module is None:
-            linear = [n for n, m in modules.items() if n and isinstance(m, nn.Linear)]
+            linear = [n for n, m in modules.items() if n and type(m) is nn.Linear]
             raise ValueError(f"the model has no layer named {name!r}; its linear layers are {linear}")
         if isinstance(module, HebbianLinear):
             raise ValueError(f"layer {name!r} is already a HebbianLinear")
-        if not isinstance(module, nn.Linear):
-            raise TypeError(f"layer {name!r} is a {type(module).__name__}, not an nn.Linear")
+        if type(module) is not nn.Linear:
+            # also refuses subclasses: they may compute something else in
+            # forward(), or (LazyLinear) not have their weights yet
+            raise TypeError(
+                f"layer {name!r} is a {type(module).__name__}; "
+                f"only plain nn.Linear layers can be converted"
+            )
 
+    # Build all the new layers before touching the model, so that an invalid
+    # setting leaves it unchanged.
+    replacements = {}
     for name, layer_settings in plan.items():
-        parent_name, _, child_name = name.rpartition(".")
-        replacement = HebbianLinear.from_linear(modules[name], **layer_settings)
-        setattr(modules[parent_name], child_name, replacement)
+        original = modules[name]
+        if id(original) in replacements:
+            raise ValueError(f"layer {name!r} is listed twice (it has more than one name)")
+        replacements[id(original)] = HebbianLinear.from_linear(original, **layer_settings)
+
+    # A layer may be registered under several names: replace every reference.
+    for parent in list(model.modules()):
+        for child_name, child in list(parent._modules.items()):
+            if id(child) in replacements:
+                setattr(parent, child_name, replacements[id(child)])
     return model
 
 
@@ -138,6 +165,8 @@ def set_rules(model: nn.Module, rules, *, freeze: bool = True) -> None:
             f"expected rules of shape ({total},), or (K, {total}) for K rule sets, "
             f"got {rules.shape}"
         )
+    if rules.ndim == 2 and rules.shape[0] == 0:
+        raise ValueError("a population needs at least one rule set, got an empty array")
     start = 0
     for layer in layers:
         layer._write_rules(torch.from_numpy(rules[..., start:start + layer.num_rules]))
@@ -148,7 +177,12 @@ def set_rules(model: nn.Module, rules, *, freeze: bool = True) -> None:
 
 
 def save_rules(model: nn.Module, path: PathLike) -> None:
-    """Save the model's rule vector to a ``.npy`` file."""
+    """Save the model's rule vector to a ``.npy`` file.
+
+    As with ``numpy.save``, ``.npy`` is appended to a path given as a string
+    without that extension. ``eta`` and ``decay`` are not stored: rules are
+    meaningful for the layer settings they were optimised with.
+    """
     np.save(path, get_rules(model))
 
 

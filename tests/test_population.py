@@ -152,3 +152,42 @@ def test_population_rules_are_saved_as_a_2d_array(tmp_path):
     hb.load_rules(other, tmp_path / "population.npy")
 
     assert np.array_equal(hb.get_rules(other), population)
+
+
+def test_loading_a_state_dict_with_rules_replaces_an_active_population():
+    # Rules loaded through load_state_dict must be the ones that act, even if
+    # a population from an earlier evaluation is still held by the layer.
+    layer = make_layer([[2.0]], eta=0.5, decay=0.0)
+    hb.set_rules(layer, [[0, 0, 0, 2.0], [0, 0, 0, 4.0]])
+    state = layer.state_dict()
+    state["D"] = torch.tensor([[8.0]])
+
+    layer.load_state_dict(state)
+    hb.reset_state(layer)
+    layer(torch.ones(3, 1))
+
+    assert layer(torch.ones(3, 1)).flatten().tolist() == [6.0, 6.0, 6.0]
+
+
+def test_loading_a_state_dict_without_rules_keeps_the_population():
+    layer = make_layer([[2.0]], eta=0.5, decay=0.0)
+    hb.set_rules(layer, [[0, 0, 0, 2.0], [0, 0, 0, 4.0]])
+
+    layer.load_state_dict({"weight": torch.tensor([[2.0]])}, strict=False)
+    layer(torch.ones(2, 1))
+
+    assert layer(torch.ones(2, 1)).flatten().tolist() == [3.0, 4.0]
+
+
+def test_repr_shows_an_active_population():
+    layer = HebbianLinear(2, 2)
+    assert "population" not in repr(layer)
+
+    hb.set_rules(layer, np.zeros((3, 16)))
+
+    assert "population=3" in repr(layer)
+
+
+def test_an_empty_population_is_rejected():
+    with pytest.raises(ValueError, match="at least one"):
+        hb.set_rules(HebbianLinear(2, 2), np.zeros((0, 16)))

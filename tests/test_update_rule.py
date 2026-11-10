@@ -140,3 +140,37 @@ def test_w_max_is_symmetric():
 def test_rejects_meaningless_hyperparameters(kwargs):
     with pytest.raises(ValueError):
         HebbianLinear(2, 2, **kwargs)
+
+
+def test_decay_and_w_max_are_validated_when_assigned_later():
+    layer = HebbianLinear(2, 2)
+
+    with pytest.raises(ValueError):
+        layer.decay = 3.0
+    with pytest.raises(ValueError):
+        layer.w_max = -1.0
+
+    assert layer.decay == 0.05 and layer.w_max is None  # unchanged
+
+
+def test_hyperparameters_can_be_changed_after_construction():
+    # w0 = 2, D = 4, eta = 0.5: one step gives W = 4. Then decay = 1 and eta = 0
+    # bring the weight straight back.
+    layer = make_layer([[2.0]], eta=0.5, decay=0.0)
+    set_rule(layer, "D", [[4.0]])
+    layer(torch.ones(1))
+
+    layer.decay, layer.eta = 1.0, 0.0
+    outputs = rollout(layer, [[1.0], [1.0]])
+
+    assert [y.item() for y in outputs] == [4.0, 2.0]
+
+
+def test_plastic_weight_is_a_copy_before_and_after_the_first_step():
+    layer = make_layer([[2.0]], eta=0.5, decay=0.0)
+
+    before = layer.plastic_weight
+    with torch.no_grad():
+        before.fill_(99.0)
+
+    assert layer.weight.item() == 2.0

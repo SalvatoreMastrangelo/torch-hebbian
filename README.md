@@ -21,9 +21,9 @@ pip install git+https://github.com/SalvatoreMastrangelo/torch-hebbian
 
 or, from a local clone, `pip install -e path/to/clone`.
 
-Tested with Python 3.10, torch 2.12 and numpy 2.2, on CPU and CUDA. The package
-accepts Python ≥ 3.9, torch ≥ 2.0 and numpy ≥ 1.21 and uses nothing newer on
-purpose, but those older versions have not been tested.
+Requires Python ≥ 3.10, torch ≥ 2.0 and numpy ≥ 1.24. The test-suite passes
+on Python 3.10 with torch 2.12 and numpy 2.2 (CPU and CUDA), and on Python 3.11
+with torch 2.0.1 and numpy 1.24 (CPU).
 
 ## The rule
 
@@ -63,8 +63,8 @@ with torch.no_grad():
         action = model(obs)
 ```
 
-Rules start at zero, and with zero rules `HebbianLinear` computes exactly what
-`nn.Linear` computes. Plasticity appears once rules are set or trained.
+Rules start at zero, and with zero rules `HebbianLinear` gives the same outputs
+as `nn.Linear`. Plasticity appears once rules are set or trained.
 
 To add plasticity to a network that already exists:
 
@@ -74,7 +74,8 @@ hb.hebbianize(policy, {"actor.4": dict(eta=0.005, decay=0.05)})
 
 The named `nn.Linear` layers are replaced in place. The new layers reuse the
 original weight and bias parameters, so the network behaves as before and
-optimisers that hold those parameters keep working.
+optimisers that hold those parameters keep working. Only plain `nn.Linear`
+layers are accepted, not subclasses.
 
 ## How the state works
 
@@ -88,12 +89,16 @@ matrix.
   is what vectorised environments need.
 - **The state lasts until you reset it.** Call `hb.reset_state(model)` at the
   start of every episode. `hb.reset_state(model, rows=done)` resets only some
-  rows, where `done` is a boolean mask or a list of indices over the first
-  batch dimension.
+  rows of the first batch dimension: `done` is a **boolean** mask, or a list of
+  row indices. Integers are always read as indices, so 0/1 flags stored as
+  integers or floats are refused with an error: pass `done.bool()`.
 - **The batch shape is fixed between resets.** Changing it raises an error
   that tells you to reset.
-- **The state is not saved.** It is not part of the `state_dict`; it follows
-  the module across `.to()`, `.cuda()`, `.double()` and `copy.deepcopy`.
+- **The state is not saved.** It is not part of the `state_dict` and it is not
+  a buffer; it follows the module across `.to()`, `.cuda()`, `.double()` and
+  `copy.deepcopy`.
+- A non-finite input (`inf`, `nan`) turns the plastic weights of that row into
+  `nan` until the row is reset. Other rows are not affected.
 - Plasticity is active in both `train()` and `eval()` mode. Set
   `layer.plastic = False` to pause it (the current plastic weights stay in use).
 - `layer.plastic_weight` and `layer.weight_delta` give the current weights and
@@ -106,8 +111,8 @@ hb.reset_state(policy)
 obs = envs.reset()
 with torch.no_grad():
     while running:
-        obs, reward, done = envs.step(policy(obs))
-        hb.reset_state(policy, rows=done)     # finished episodes start from W₀ again
+        obs, reward, done = envs.step(policy(obs))    # done: bool, one per environment
+        hb.reset_state(policy, rows=done)             # finished episodes start from W₀ again
 ```
 
 ## Evolving the rules
@@ -128,6 +133,10 @@ hb.rule_slices(model)                   # {"layer name": slice} into the vector
 `set_rules` and `load_rules` set `requires_grad=False` on `A, B, C, D` and on
 nothing else. Pass `freeze=False` to keep them trainable.
 
+A rule file holds the rules and nothing else. The weights are in the
+`state_dict`, and `eta`, `decay`, `w_max` are constructor settings: rules are
+meaningful only for the settings they were optimised with.
+
 **A whole population in one batch.** Give `set_rules` a `(K, n)` array, or the
 list of vectors returned by `es.ask()`, and the layer holds K rule sets at
 once. The first batch dimension is then split in K contiguous blocks, and
@@ -140,14 +149,19 @@ with torch.no_grad():
         candidates = es.ask()
         hb.set_rules(model, candidates)       # K rule sets side by side
         hb.reset_state(model)
-        fitness = rollout(model, K * S)       # rows k*S ... (k+1)*S-1 belong to candidate k
-        es.tell(candidates, fitness.reshape(K, S).mean(1).tolist())
+        cost = rollout(model, K * S)          # rows k*S ... (k+1)*S-1 belong to candidate k
+        es.tell(candidates, cost.reshape(K, S).mean(1).tolist())   # CMA-ES minimises
 hb.set_rules(model, es.mean)                  # back to a single rule set
 hb.save_rules(model, "rules.npy")
 ```
 
+While a population is loaded it replaces the `A, B, C, D` parameters, and
+`repr(layer)` shows `population=K`. It stays active until a single vector is
+set, or until rules are loaded with `load_state_dict`.
+
 Run evolution under `torch.no_grad()`: no graph is built and the weights are
-updated in place.
+updated in place. Without it, as long as any parameter requires gradients,
+autograd records every step until the next full `reset_state`.
 
 ## Training the rules by gradient descent
 
@@ -189,8 +203,8 @@ Every function takes any `nn.Module`, including a single `HebbianLinear`.
 
 ## Examples
 
-Install the extra dependencies with `pip install "torch-hebbian[examples]"`
-(pycma and Gymnasium), then run from the repository root.
+The examples also need pycma and Gymnasium (`pip install cma gymnasium`). Run
+them from the repository root.
 
 | Script | What it shows | Result |
 |---|---|---|

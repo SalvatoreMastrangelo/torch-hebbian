@@ -68,7 +68,7 @@ def main(argv=None) -> dict:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     hb.save_rules(model, args.out)
 
-    say(f"\nrecall error on 2000 new episodes (1.0 = chance)")
+    say("\nrecall error on 2000 new episodes (1.0 = chance)")
     say(f"  trained network                    {error_trained:.4f}")
     say(f"  same network with plasticity off   {error_plasticity_off:.4f}")
     say(f"rules saved to {args.out}")
