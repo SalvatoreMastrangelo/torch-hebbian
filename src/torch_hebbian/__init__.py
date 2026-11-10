@@ -2,6 +2,7 @@ from .layer import HebbianLinear
 from .model import (
     detach_state,
     get_rules,
+    get_state,
     hebbian_layers,
     hebbianize,
     load_rules,
@@ -11,12 +12,14 @@ from .model import (
     rule_slices,
     save_rules,
     set_rules,
+    set_state,
 )
 
 __all__ = [
     "HebbianLinear",
     "detach_state",
     "get_rules",
+    "get_state",
     "hebbian_layers",
     "hebbianize",
     "load_rules",
@@ -26,4 +29,5 @@ __all__ = [
     "rule_slices",
     "save_rules",
     "set_rules",
+    "set_state",
 ]

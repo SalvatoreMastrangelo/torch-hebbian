@@ -179,15 +179,63 @@ class HebbianLinear(nn.Linear):
     # state
     # ------------------------------------------------------------------
 
-    @property
-    def weight_delta(self) -> Optional[Tensor]:
-        """Deviation of the plastic weights from ``weight``, ``(*batch, out, in)``.
+    def get_state(self) -> Optional[Tensor]:
+        """The plastic state: deviation of every row's weights from ``weight``.
 
-        A copy. ``None`` before the first forward pass after a reset.
+        Shape ``(*batch, out_features, in_features)``, or ``None`` when the
+        layer holds no state (before the first forward pass after a reset).
+
+        The result is a copy: later steps do not change it. It keeps the
+        autograd history of the state; call ``.detach()`` on it to store it
+        without one.
         """
         if self._delta is None:
             return None
         return self._delta.reshape(*self._batch_shape, self.out_features, self.in_features).clone()
+
+    def set_state(self, state) -> None:
+        """Install a plastic state, typically one returned by :meth:`get_state`.
+
+        Args:
+            state: tensor or array of shape ``(*batch, out_features,
+                in_features)``. Its leading dimensions become the batch shape
+                the layer expects from now on, so this can also change which
+                rows are in the batch. ``None`` is the same as
+                :meth:`reset_state`.
+
+        The state is copied (to the device and dtype of the layer), so the
+        tensor passed in is neither modified nor followed afterwards. If it
+        carries autograd history, gradients flow back through it.
+        """
+        self._install_state(self._prepare_state(state))
+
+    def _prepare_state(self, state) -> Optional[Tensor]:
+        """Check a state given to :meth:`set_state`; change nothing yet."""
+        if state is None:
+            return None
+        state = torch.as_tensor(state)
+        shape = (self.out_features, self.in_features)
+        if state.dim() < 2 or tuple(state.shape[-2:]) != shape:
+            raise ValueError(
+                f"expected a state of shape (*batch, {shape[0]}, {shape[1]}), "
+                f"got {tuple(state.shape)}"
+            )
+        return state.to(device=self.weight.device, dtype=self.weight.dtype)
+
+    def _install_state(self, state: Optional[Tensor]) -> None:
+        if state is None:
+            self.reset_state()
+            return
+        self._batch_shape = state.shape[:-2]
+        # an own copy, which the plastic update is then free to overwrite
+        self._delta = state.reshape(-1, self.out_features, self.in_features).clone()
+        self._delta_in_graph = False
+
+    @property
+    def weight_delta(self) -> Optional[Tensor]:
+        """Same as :meth:`get_state`: the deviation of the plastic weights from
+        ``weight``, ``(*batch, out, in)``, or ``None`` when there is no state."""
+        return self.get_state()
 
     @property
     def plastic_weight(self) -> Tensor:

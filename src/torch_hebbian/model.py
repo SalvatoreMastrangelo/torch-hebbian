@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from typing import Dict, Iterable, List, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 from torch import nn
+
+from torch import Tensor
 
 from .layer import RULE_NAMES, HebbianLinear
 
@@ -206,3 +208,42 @@ def detach_state(model: nn.Module) -> None:
     """Cut the autograd history of every layer's plastic weights."""
     for _, layer in hebbian_layers(model):
         layer.detach_state()
+
+
+def get_state(model: nn.Module) -> Dict[str, Optional[Tensor]]:
+    """Snapshot of the plastic state of every layer, keyed by module name.
+
+    Each value is what ``HebbianLinear.get_state`` returns: a copy of the
+    deviation of the plastic weights from the layer's ``weight``, shape
+    ``(*batch, out, in)``, or ``None`` for a layer without state. The tensors
+    keep the autograd history of the state (``.detach()`` them to store plain
+    values). The result is an ordinary dict, so ``torch.save`` can store it.
+    """
+    return {name: layer.get_state() for name, layer in hebbian_layers(model)}
+
+
+def set_state(model: nn.Module, state: Mapping) -> None:
+    """Restore a snapshot taken by :func:`get_state`.
+
+    ``state`` must have one entry per plastic layer of the model. The batch
+    shape is taken from the snapshot, so a snapshot whose tensors were indexed
+    along the batch (``{name: s[keep] for name, s in state.items()}``) changes
+    which rows are in the batch. Either every layer is restored or, if
+    anything is wrong, none is. See ``HebbianLinear.set_state``.
+    """
+    layers = dict(hebbian_layers(model))
+    missing = [name for name in layers if name not in state]
+    unexpected = [name for name in state if name not in layers]
+    if missing or unexpected:
+        raise ValueError(
+            f"the snapshot does not match the plastic layers of the model: "
+            f"missing {missing}, unexpected {unexpected}"
+        )
+    prepared = {}
+    for name, layer in layers.items():  # check everything before installing anything
+        try:
+            prepared[name] = layer._prepare_state(state[name])
+        except ValueError as error:
+            raise ValueError(f"layer {name!r}: {error}") from None
+    for name, layer in layers.items():
+        layer._install_state(prepared[name])

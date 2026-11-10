@@ -94,15 +94,16 @@ matrix.
   integers or floats are refused with an error: pass `done.bool()`.
 - **The batch shape is fixed between resets.** Changing it raises an error
   that tells you to reset.
-- **The state is not saved.** It is not part of the `state_dict` and it is not
-  a buffer; it follows the module across `.to()`, `.cuda()`, `.double()` and
-  `copy.deepcopy`.
+- **The state is not saved with the model.** It is not part of the
+  `state_dict` and it is not a buffer; it follows the module across `.to()`,
+  `.cuda()`, `.double()` and `copy.deepcopy`. To keep it, take a snapshot (see
+  below).
 - A non-finite input (`inf`, `nan`) turns the plastic weights of that row into
   `nan` until the row is reset. Other rows are not affected.
 - Plasticity is active in both `train()` and `eval()` mode. Set
   `layer.plastic = False` to pause it (the current plastic weights stay in use).
-- `layer.plastic_weight` and `layer.weight_delta` give the current weights and
-  their deviation from `layer.weight`, shape `(*batch, out, in)`.
+- `layer.plastic_weight` gives the weights a row currently uses, shape
+  `(*batch, out, in)`.
 
 A typical loop with a vectorised environment:
 
@@ -114,6 +115,34 @@ with torch.no_grad():
         obs, reward, done = envs.step(policy(obs))    # done: bool, one per environment
         hb.reset_state(policy, rows=done)             # finished episodes start from W₀ again
 ```
+
+### Saving and restoring the state
+
+The state of a layer is the deviation of every row's plastic weights from the
+layer's `weight`, a tensor of shape `(*batch, out, in)`.
+
+```python
+state = hb.get_state(model)     # {"layer name": tensor}, one entry per plastic layer
+...                             # more steps
+hb.set_state(model, state)      # the model is back at that moment
+```
+
+- `get_state` returns copies, and `set_state` copies what it is given: a
+  snapshot and the model never share memory.
+- A snapshot is an ordinary dict of tensors: `torch.save` stores it, and it can
+  be loaded into another copy of the model, on another device.
+- The batch shape comes from the snapshot, so indexing it changes which rows
+  are in the batch:
+  `hb.set_state(model, {name: s[keep] for name, s in state.items()})`.
+- Snapshots keep the autograd history of the state, so gradients flow through
+  a restored state. Call `.detach()` on the tensors to store plain values.
+- A layer that has no state yet (just after a reset) is `None` in the
+  snapshot, and restoring `None` resets it.
+
+This is what replaying stored rollouts needs (start each chunk from the state it
+had when it was collected), and what resuming or branching in the middle of an
+episode needs. `layer.get_state()` and `layer.set_state(tensor)` do the same for
+a single layer.
 
 ## Evolving the rules
 
@@ -196,6 +225,7 @@ backpropagation, as you would detach the hidden state of an RNN.
 | `save_rules(model, path)`, `load_rules(model, path, freeze=True)` | the same through a `.npy` file |
 | `rule_parameters(model)` | the `A, B, C, D` parameters, for an optimiser |
 | `reset_state(model, rows=None)` | plastic weights back to `weight` |
+| `get_state(model)`, `set_state(model, state)` | snapshot of the plastic weights as `{layer name: tensor}`, and its restoration |
 | `detach_state(model)` | cut the autograd history of the plastic weights |
 | `hebbian_layers(model)` | `(name, layer)` for every plastic layer |
 
